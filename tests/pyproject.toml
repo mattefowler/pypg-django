@@ -1,0 +1,26 @@
+[build-system]
+requires=["setuptools", "wheel", "setuptools-git-versioning<2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools-git-versioning]
+enabled = true
+
+[project]
+dynamic=["version"]
+name="pypg-django-test"
+description="test package for pypg-django"
+readme="README.md"
+authors=[{name="Matt Fowler", email="mattefowler@gmail.com"}]
+keywords=["graph", "serialization", "metadata", "property", "schema", "django", "ORM"]
+classifiers=[
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+license={file="LICENSE"}
+requires-python=">=3.11"
+dependencies=["pypg-django"]
+[tool.black]
+line-length=79
+
