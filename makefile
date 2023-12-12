@@ -1,6 +1,6 @@
 .PHONY: devenv
 devenv:
-	python -m venv venv && venv/bin/activate && pip install -r requirements-dev.txt
+	rm -rf venv; python -m venv venv && source venv/bin/activate && pip install -r requirements-dev.txt
 
 .PHONY: test_migrations
 test_migrations:
