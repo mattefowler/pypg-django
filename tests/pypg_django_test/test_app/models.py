@@ -5,3 +5,7 @@ from pypg_django.property import PropertyClass, Property, DbField
 class TestClass(PropertyClass):
     foo = Property[float](traits=[DbField()])
     str_field = Property[str](traits=[DbField()])
+
+
+class Subclass(TestClass):
+    bar = Property[int](traits=[DbField()])

@@ -160,6 +160,6 @@ cython_debug/
 .idea/
 .vscode/
 tests/pypg_django_test/db.sqlite3
-tests/pypg_django_test/test_app/migrations/
+tests/pypg_django_test/test_app/migrations/*
 *.DS_Store
 *__pycache__/

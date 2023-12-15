@@ -15,44 +15,33 @@ from django.db.models import (
     DateTimeField,
     CASCADE,
     JSONField,
+    QuerySet,
 )
 from django.utils.functional import cached_property
+from polymorphic.models import PolymorphicModel
 from pypg import TypeRegistry, Property
 from pypg.property import (
     DataModifierMixin,
     PostSet,
     PropertyClass as _PropertyClass,
-    PropertyType,
 )
-from pypg.traits import ReadOnly
 
 
-class ModelMeta(PropertyType):
-    def __new__(mcs, name, bases, attrs):
-        cls = super().__new__(mcs, name, bases, attrs)
-        cls._instances = ChainMap[int, weakref.ReferenceType](
-            getattr(cls.__base__, "_instances", {})
-        )
-        return cls
-
-    _instances: dict[int, weakref.ReferenceType]
-
-    def __call__(cls, *args, **cfg):
-        return (
-            super().__call__( *args, **cfg)
-            if (obj_id := cfg.get(PropertyClass.id.name, None)) is None
-            else cls._instances[obj_id]()
-        )
-
-
-class PropertyClass(_PropertyClass, metaclass=ModelMeta):
+class PropertyClass(_PropertyClass):
     model_type: type[Model]
+    __models: dict[type[Model], type[PropertyClass]] = {}
+    _instances: ChainMap[int, weakref.ReferenceType]
 
-    def __init_subclass__(cls, model_type: type[Model] = Model, **kwargs):
-        super().__init_subclass__()
+    def _create_model(self):
+        return self.model_type()
+
+    _model_instance = Property[Model](_create_model)
+
+    @classmethod
+    def create_model(cls, model_type=PolymorphicModel):
         fields = {t.subject.name: t.field for t in DbField.in_type(cls)}
         model_base = getattr(cls.__base__, "model_type", model_type)
-        cls.model_type = type(model_type)(
+        return type(model_type)(
             cls.__name__,
             (model_base,),
             {
@@ -61,36 +50,50 @@ class PropertyClass(_PropertyClass, metaclass=ModelMeta):
             },
         )
 
-    __id_readonly = ReadOnly()
+    def __init_subclass__(
+        cls, model_type: type[Model] = PolymorphicModel, **kwargs
+    ):
+        super().__init_subclass__()
+        cls.model_type = cls.create_model(model_type)
+        cls.__models[cls.model_type] = cls
+        cls._instances = ChainMap[int, weakref.ReferenceType]()
+        if (
+            base_instances := getattr(cls.__base__, "_instances", None)
+        ) is not None:
+            cls.__base__._instances = base_instances.new_child(cls._instances)
 
-    def _set_id(self, obj_id):
-        type(self).id.default_setter(self, obj_id)
-        if obj_id is None:
-            return
-        type(self)._instances[obj_id] = weakref.ref(self)
+    @property
+    def pk(self):
+        return self._model_instance.pk
+
+    def save(self):
+        self._model_instance.save()
+        pk = self._model_instance.pk
+        type(self)._instances[pk] = weakref.ref(self)
 
         def pop_instance():
-            self._instances.pop(obj_id)
+            self._instances.pop(pk)
 
         f = weakref.finalize(self, pop_instance)
         f.atexit = False
 
-    id = Property[int](setter=_set_id, traits=[__id_readonly])
+    @classmethod
+    def get(cls, *args, pk: int = None, **kwargs):
+        if pk is not None:
+            try:
+                return cls._instances[pk]()
+            except KeyError:
+                pass
+        return cls(_model_instance=cls.model_type.objects.get(*args, **kwargs))
 
-    def _create_model_instance(self):
-        return (
-            self.model_type()
-            if self.id is None
-            else self.model_type.objects.get(id=self.id)
-        )
-
-    _model_instance: Model = Property[Model](default=_create_model_instance)
-
-    def save(self):
-        self._model_instance.save()
-        with self.__id_readonly.override(self):
-            self.id = self._model_instance.id
-            self._instance_id = self._model_instance.id
+    @classmethod
+    def from_queryset(cls, query_set: QuerySet):
+        for item in query_set:
+            item: Model
+            try:
+                yield cls._instances[item.pk]()
+            except KeyError:
+                yield cls.__models[type(item)](_model_instance=item)
 
 
 class DbField(DataModifierMixin[PostSet]):
@@ -147,6 +150,8 @@ class DbField(DataModifierMixin[PostSet]):
     def in_type(cls, t: type[PropertyClass]) -> Iterable[DbField]:
         for p in t.properties:
             p: Property
+            if not p.declaring_type is t:
+                continue
             for tr in p.traits:
                 if isinstance(tr, cls):
                     yield tr
