@@ -1,6 +1,6 @@
 .PHONY: devenv
 devenv:
-	rm -rf venv; python -m venv venv && source venv/bin/activate && pip install -r requirements-dev.txt
+	git clean -fd; rm -rf venv; python -m venv venv && source venv/bin/activate && pip install -r requirements-dev.txt
 
 .PHONY: test_migrations
 test_migrations:
@@ -14,3 +14,4 @@ test_migrate:
 schema:
 	test_migrations
 	test_migrate
+
