@@ -20,7 +20,7 @@ classifiers = [
 ]
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-dependencies = ["django~=5.0", "property-graph~=2.2", "django-polymorphic~=3.1.0"]
+dependencies = ["django~=5.0", "property-graph~=2.2,>=2.2.1", "django-polymorphic~=3.1.0"]
 [tool.black]
 line-length = 79
 
