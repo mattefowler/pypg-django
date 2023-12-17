@@ -19,7 +19,7 @@ jobs:
       - name: setup
         run: make devenv
       - name: test
-        run: coverage run -m unittest discover tests && coverage lcov
+        run: coverage run --source=src tests/pypg_django_test/manage.py test test_app && coverage lcov
       - name: Code Coverage Report
         uses: romeovs/lcov-reporter-action@v0.2.11
         with:
