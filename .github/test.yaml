@@ -1,0 +1,27 @@
+name: Test & Report Coverage
+on:
+  - pull_request
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v4
+        with:
+        # Semantic version range syntax or exact version of a Python version
+          python-version: '3.11'
+        # Optional - x64 or x86 architecture, defaults to x64
+      - name: setup
+        run: make devenv
+      - name: test
+        run: coverage run -m unittest discover tests && coverage lcov
+      - name: Code Coverage Report
+        uses: romeovs/lcov-reporter-action@v0.2.11
+        with:
+            lcov-file: coverage.lcov
+            github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -9,7 +9,7 @@ from pypg_django_test.test_app.models import (
     Subclass,
     ManyToManyTest,
 )
-from src.pypg_django.property_class import PropertyClass
+from pypg_django import PropertyClass
 
 
 class TestCase(_TestCase):

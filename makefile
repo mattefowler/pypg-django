@@ -1,6 +1,6 @@
-.PHONY: devenv
-devenv:
-	git clean -fd; rm -rf venv; python -m venv venv && source venv/bin/activate && pip install -r requirements-dev.txt
+.PHONY: venv
+venv:
+	python -m venv venv && source venv/bin/activate && pip install -r requirements-dev.txt
 
 .PHONY: test_migrations
 test_migrations:
@@ -11,7 +11,13 @@ test_migrate:
 	python -m pypg_django_test.manage migrate
 
 .PHONY: schema
-schema:
-	test_migrations
-	test_migrate
+schema: test_migrations test_migrate
+
+.PHONY: clean
+clean:
+	git clean -xfd
+
+.PHONY: devenv
+devenv: clean venv schema
+
 
