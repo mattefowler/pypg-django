@@ -76,16 +76,13 @@ class PropertyClass(_PropertyClass):
         super().__init_subclass__()
         cls.fields = {*DbField.in_type(cls)}
         fields = {
-            t.subject.name: t.field
-            for t in cls.fields.difference(cls.__base__.fields)
+            t.subject.name: t.field for t in cls.fields.difference(cls.__base__.fields)
         }
         cls.model_type = cls.create_model(model_type, **fields)
         cls.models[cls.model_type] = cls
         cls.instances = ChainMap[int, weakref.ReferenceType]()
         if issubclass(cls.__base__, PropertyClass):
-            cls.__base__.instances = cls.__base__.instances.new_child(
-                cls.instances
-            )
+            cls.__base__.instances = cls.__base__.instances.new_child(cls.instances)
 
     @property
     def pk(self):
@@ -119,10 +116,11 @@ class PropertyClass(_PropertyClass):
     def from_queryset(cls, query_set: QuerySet):
         for item in query_set:
             item: Model
+            ptype = cls.models[type(item)]
             try:
-                yield cls.instances[item.pk]()
+                yield ptype.instances[item.pk]()
             except KeyError:
-                yield cls.models[type(item)](_model_instance=item)
+                yield ptype(_model_instance=item)
 
 
 class FieldProxy:
@@ -130,12 +128,10 @@ class FieldProxy:
 
     @classmethod
     def create(cls, dbfield: DbField):
-        if ManyToManyProxy.get_many_to_many_ref_field(
-            dbfield.subject.value_type
-        ):
+        if ManyToManyProxy.get_many_to_many_ref_field(dbfield.subject.value_type):
             return ManyToManyProxy(dbfield)
         try:
-            cls.registry[dbfield.subject.value_type :]
+            return cls.registry[dbfield.subject.value_type :](dbfield)
         except KeyError:
             return cls(dbfield)
 
@@ -188,13 +184,26 @@ class CollectionProxy(FieldProxy):
 @FieldProxy.registry.register_key(PropertyClass)
 class ReferenceProxy(FieldProxy):
     def get(self, instance: PropertyClass):
-        return PropertyClass.from_model(super().get(instance))
+        member = super().get(instance)
+        return PropertyClass.models[type(member)].from_model(member)
+
+    def set(self, instance: PropertyClass, value: PropertyClass):
+        try:
+            setattr(
+                instance._model_instance, self.owner.subject.name, value._model_instance
+            )
+        except Exception:
+            raise
+
+    def __save__(self, instance: PropertyClass):
+        super().__save__(instance)
 
     @cached_property
     def field(self):
         return ForeignKey(
-            PropertyClass.models[self.owner.subject.value_type],
+            self.owner.subject.value_type.model_type,
             on_delete=CASCADE,
+            related_name=self.owner.subject.name,
         )
 
 
@@ -224,7 +233,7 @@ class ManyToManyProxy(CollectionProxy):
             mmf.add(item._model_instance)
 
     def get(self, instance):
-        return [*type(instance).from_queryset(super().get(instance).all())]
+        return [*PropertyClass.from_queryset(super().get(instance).all())]
 
     @cached_property
     def field(self):
@@ -243,10 +252,6 @@ class DbField(DataModifierMixin[PostSet]):
     def __save__(self, instance):
         self._proxy.__save__(instance)
 
-    @property
-    def field(self):
-        return self._proxy.field
-
     def __bind__(self, subject: Property):
         super().__bind__(subject)
         self._proxy = FieldProxy.create(self)
@@ -263,8 +268,5 @@ class DbField(DataModifierMixin[PostSet]):
     @classmethod
     def in_type(cls, t: type[PropertyClass]) -> Iterable[DbField]:
         return itertools.chain.from_iterable(
-            (
-                (tr for tr in p.traits if isinstance(tr, cls))
-                for p in t.properties
-            )
+            ((tr for tr in p.traits if isinstance(tr, cls)) for p in t.properties)
         )
