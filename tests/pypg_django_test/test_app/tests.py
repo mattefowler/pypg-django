@@ -7,6 +7,7 @@ from django.test import TestCase as _TestCase
 
 from pypg_django_test.test_app.models import (
     ForeignKeyTest,
+    JsonTypesTest,
     TestClass,
     Subclass,
     ManyToManyTest,
@@ -105,3 +106,13 @@ class Tests(TestCase):
         tc, sc = fkt.related_list.related
         self.assertIs(tc, fkt.related_parent)
         self.assertIs(sc, fkt.related_child)
+
+    def test_json_fields(self):
+        lvar = [*range(4)]
+        dvar = {"a": [0], "b": [1]}
+        pk = JsonTypesTest(list_field=lvar, dict_field=dvar).save().pk
+        self.clear_instances()
+        instance = JsonTypesTest.get(pk=pk)
+        self.assertIsInstance(instance, JsonTypesTest)
+        self.assertEqual(lvar, instance.list_field)
+        self.assertEqual(dvar, instance.dict_field)

@@ -96,7 +96,7 @@ class PropertyClass(_PropertyClass):
         return self
 
     @classmethod
-    def get(cls, *args, pk: int = None, **kwargs):
+    def get(cls, pk: int = None, *args, **kwargs):
         if pk is not None:
             try:
                 return cls.instances[pk]()
@@ -217,9 +217,9 @@ class ManyToManyProxy(CollectionProxy):
             )
         ]
         return (
-            None
-            if (len(type_args) != 1 or isinstance(type_args[0], PropertyClass))
-            else type_args[0].model_type
+            type_args[0].model_type
+            if len(type_args) == 1 and issubclass(type_args[0], PropertyClass)
+            else None
         )
 
     def set(self, instance: PropertyClass, value: Iterable):
