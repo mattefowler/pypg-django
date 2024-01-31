@@ -17,7 +17,7 @@ class ManyToManyTest(PropertyClass):
 
 class ForeignKeyTest(PropertyClass):
     related_parent = Property[TestClass](traits=[DbField()])
-    related_child = Property[Subclass](traits=[DbField()])
+    related_child = Property[Subclass](traits=[DbField(related_name='children')])
     related_list = Property[ManyToManyTest](traits=[DbField()])
 
 

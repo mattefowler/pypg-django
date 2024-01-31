@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import weakref
 from datetime import datetime
-from typing import Any, ChainMap, Iterable, get_args
+from typing import Any, ChainMap, Iterable, get_args, get_origin
 
 from django.db.models import (
     Model,
@@ -20,13 +20,15 @@ from django.db.models import (
 )
 from django.utils.functional import cached_property
 from polymorphic.models import PolymorphicModel
-from pypg import TypeRegistry
+from pypg import TypeRegistry, Locator, get_fully_qualified_name
 from pypg.property import (
     DataModifierMixin,
     PostSet,
     Property,
     PropertyClass as _PropertyClass,
 )
+
+_locate = Locator()
 
 
 class PropertyClass(_PropertyClass):
@@ -56,8 +58,11 @@ class PropertyClass(_PropertyClass):
     def create_model(
         cls,
         model_type,
+        abstract: bool = False,
         **fields,
     ):
+        if "Meta" in cls.__dict__:
+            fields["Meta"] = getattr(cls, "Meta")
         model_base = getattr(cls.__base__, "model_type", model_type)
         return type(model_type)(
             cls.__name__,
@@ -76,22 +81,27 @@ class PropertyClass(_PropertyClass):
         super().__init_subclass__()
         cls.fields = {*DbField.in_type(cls)}
         fields = {
-            t.subject.name: t.field for t in cls.fields.difference(cls.__base__.fields)
+            t.subject.name: t.field
+            for t in cls.fields.difference(cls.__base__.fields)
         }
         cls.model_type = cls.create_model(model_type, **fields)
         cls.models[cls.model_type] = cls
         cls.instances = ChainMap[int, weakref.ReferenceType]()
         if issubclass(cls.__base__, PropertyClass):
-            cls.__base__.instances = cls.__base__.instances.new_child(cls.instances)
+            cls.__base__.instances = cls.__base__.instances.new_child(
+                cls.instances
+            )
 
     @property
     def pk(self):
         return self._model_instance.pk
 
     def save(self):
-        self._model_instance.save()
         for dbf in type(self).fields:
             dbf.__save__(self)
+        self._model_instance.save()
+        for dbf in type(self).fields:
+            dbf.__save_related__(self)
         self._cache_instance()
         return self
 
@@ -102,8 +112,11 @@ class PropertyClass(_PropertyClass):
                 return cls.instances[pk]()
             except KeyError:
                 kwargs["pk"] = pk
-
-        return cls(_model_instance=cls.model_type.objects.get(*args, **kwargs))
+        try:
+            mi = cls.model_type.objects.get(*args, **kwargs)
+        except cls.model_type.DoesNotExist:
+            return None
+        return cls(_model_instance=mi)
 
     @classmethod
     def from_model(cls, model: Model):
@@ -117,10 +130,17 @@ class PropertyClass(_PropertyClass):
         for item in query_set:
             item: Model
             ptype = cls.models[type(item)]
-            try:
-                yield ptype.instances[item.pk]()
-            except KeyError:
-                yield ptype(_model_instance=item)
+            yield ptype.from_model(item)
+
+    def __getattr__(self, item):
+        value = getattr(self._model_instance, item)
+        if isinstance(value, QuerySet):
+            return self.from_queryset(value)
+        try:
+            p_cls = PropertyClass.models[type(value)]
+        except KeyError:
+            return value
+        return p_cls.from_model(value)
 
 
 class FieldProxy:
@@ -128,10 +148,12 @@ class FieldProxy:
 
     @classmethod
     def create(cls, dbfield: DbField):
-        if ManyToManyProxy.get_many_to_many_ref_field(dbfield.subject.value_type):
+        if ManyToManyProxy.get_many_to_many_ref_field(
+            dbfield.subject.value_type
+        ):
             return ManyToManyProxy(dbfield)
         try:
-            return cls.registry[dbfield.subject.value_type :](dbfield)
+            return cls.registry[dbfield.subject.value_type:](dbfield)
         except KeyError:
             return cls(dbfield)
 
@@ -139,6 +161,9 @@ class FieldProxy:
         self.owner = owner
 
     def __save__(self, instance: PropertyClass):
+        pass
+
+    def __save_related__(self, instance: PropertyClass):
         pass
 
     def set(self, instance: PropertyClass, value):
@@ -150,7 +175,7 @@ class FieldProxy:
     @cached_property
     def field(self):
         field_type, default_args, default_kwargs = self.field_map[
-            self.owner.subject.value_type :
+        self.owner.subject.value_type:
         ]
         return field_type(
             *(self.owner.field_args or default_args),
@@ -168,6 +193,12 @@ class FieldProxy:
         }
     )
 
+    def _pop_related_name(self):
+        try:
+            return self.owner.field_kwargs.pop('related_name')
+        except KeyError:
+            return '+'
+
 
 @FieldProxy.registry.register_key(list, tuple, set, dict)
 class CollectionProxy(FieldProxy):
@@ -181,29 +212,44 @@ class CollectionProxy(FieldProxy):
     )
 
 
+@FieldProxy.registry.register_key(type)
+class TypeProxy(FieldProxy):
+    def get(self, instance: PropertyClass):
+        return _locate(super().get(instance))
+
+    def set(self, instance: PropertyClass, value: type):
+        super().set(instance, get_fully_qualified_name(value))
+
+    @cached_property
+    def field(self):
+        return CharField(max_length=256)
+
+
 @FieldProxy.registry.register_key(PropertyClass)
 class ReferenceProxy(FieldProxy):
     def get(self, instance: PropertyClass):
         member = super().get(instance)
+        if member is None:
+            return None
         return PropertyClass.models[type(member)].from_model(member)
 
     def set(self, instance: PropertyClass, value: PropertyClass):
-        try:
-            setattr(
-                instance._model_instance, self.owner.subject.name, value._model_instance
-            )
-        except Exception:
-            raise
+        if value is not None:
+            value = value._model_instance
+        setattr(instance._model_instance, self.owner.subject.name, value)
 
     def __save__(self, instance: PropertyClass):
-        super().__save__(instance)
+        if (attr := self.get(instance)) is not None:
+            attr.save()
 
     @cached_property
     def field(self):
         return ForeignKey(
             self.owner.subject.value_type.model_type,
+            *self.owner.field_args,
             on_delete=CASCADE,
-            related_name=self.owner.subject.name,
+            related_name=self._pop_related_name(),
+            **self.owner.field_kwargs,
         )
 
 
@@ -218,7 +264,9 @@ class ManyToManyProxy(CollectionProxy):
         ]
         return (
             type_args[0].model_type
-            if len(type_args) == 1 and issubclass(type_args[0], PropertyClass)
+            if len(type_args) == 1
+               and issubclass(type_args[0], PropertyClass)
+               and issubclass(get_origin(t), Iterable)
             else None
         )
 
@@ -226,10 +274,14 @@ class ManyToManyProxy(CollectionProxy):
         pass
 
     def __save__(self, instance: PropertyClass):
+        pass
+
+    def __save_related__(self, instance: PropertyClass):
         value = self.owner.subject.get(instance)
         mmf = getattr(instance._model_instance, self.owner.subject.name)
         mmf.clear()
-        for item in value:
+        for item in filter(lambda i: i is not None, value):
+            item.save()
             mmf.add(item._model_instance)
 
     def get(self, instance):
@@ -238,7 +290,10 @@ class ManyToManyProxy(CollectionProxy):
     @cached_property
     def field(self):
         return ManyToManyField(
-            self.get_many_to_many_ref_field(self.owner.subject.value_type)
+            self.get_many_to_many_ref_field(self.owner.subject.value_type),
+            *self.owner.field_args,
+            related_name=self._pop_related_name(),
+            **self.owner.field_kwargs,
         )
 
 
@@ -251,6 +306,9 @@ class DbField(DataModifierMixin[PostSet]):
 
     def __save__(self, instance):
         self._proxy.__save__(instance)
+
+    def __save_related__(self, instance):
+        self._proxy.__save_related__(instance)
 
     def __bind__(self, subject: Property):
         super().__bind__(subject)
@@ -268,5 +326,8 @@ class DbField(DataModifierMixin[PostSet]):
     @classmethod
     def in_type(cls, t: type[PropertyClass]) -> Iterable[DbField]:
         return itertools.chain.from_iterable(
-            ((tr for tr in p.traits if isinstance(tr, cls)) for p in t.properties)
+            (
+                (tr for tr in p.traits if isinstance(tr, cls))
+                for p in t.properties
+            )
         )
