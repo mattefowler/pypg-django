@@ -1,10 +1,10 @@
 import gc
 
 from django.db.models import Model
-
 # Create your tests here.
 from django.test import TestCase as _TestCase
 
+from pypg_django import PropertyClass
 from pypg_django_test.test_app.models import (
     ForeignKeyTest,
     JsonTypesTest,
@@ -12,7 +12,6 @@ from pypg_django_test.test_app.models import (
     Subclass,
     ManyToManyTest,
 )
-from pypg_django import PropertyClass
 
 
 class TestCase(_TestCase):
@@ -116,3 +115,19 @@ class Tests(TestCase):
         self.assertIsInstance(instance, JsonTypesTest)
         self.assertEqual(lvar, instance.list_field)
         self.assertEqual(dvar, instance.dict_field)
+
+    def test_bulk_create(self):
+        n = 1000
+        with PropertyClass.persist():
+            tcs = [TestClass(foo=1.234, bar='asdf') for _ in range(n)]
+            self.assertTrue(all(tc.pk is None for tc in tcs))
+        self.assertTrue(all(tc.pk is not None for tc in tcs))
+
+    def test_refers_to(self):
+        self.assertTrue(ForeignKeyTest.refers_to(TestClass))
+        self.assertFalse(TestClass.refers_to(ForeignKeyTest))
+        self.assertTrue(ForeignKeyTest.refers_to(Subclass))
+        self.assertFalse(Subclass.refers_to(ForeignKeyTest))
+        expected_order = [TestClass, ForeignKeyTest]
+        ref_sort = PropertyClass.sort_reference_order(ForeignKeyTest, TestClass)
+        self.assertEqual(ref_sort, expected_order)
