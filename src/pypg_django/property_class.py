@@ -191,7 +191,10 @@ class PropertyClass(_PropertyClass):
                 obj_type: type[PropertyClass]
                 model_type = obj_type.model_type
                 if obj_type.can_bulk_create:
+                    objs: list[PropertyClass] = [*objs]
                     model_type.objects.bulk_create([obj._model_instance for obj in objs])
+                    for obj in objs:
+                        obj._cache_instance()
                 else:
                     for obj in objs:
                         obj.save()
